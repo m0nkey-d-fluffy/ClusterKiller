@@ -1,18 +1,21 @@
 # ClusterKiller
 
-A BetterDiscord plugin that provides a `!killgroup` command to close a user's group by looking up their group ID and closing it automatically.
+A BetterDiscord plugin that provides a `!killgroup` command to close a user's group by looking up their group ID and closing it automatically. **Works from any device** - use it from your phone, desktop, or web browser!
 
 ## Features
 
-- **`!killgroup @username`** - Local command to close a user's group
+- **`!killgroup @username`** - Close a user's group from any Discord client
+- **Multi-Device Support** - Works from BetterDiscord, mobile app, web browser, or any Discord client
+- **Auto-Delete Messages** - Commands sent from other devices are automatically detected and deleted
 - **Helper Role Required** - Only users with the `@helper` role can use `!killgroup`
 - **Automatic Workflow** - Runs `/ppm_of` to find the group ID, then `/close_group` to close it
-- **Any Channel Support** - Use `!killgroup` from any channel in the server - bot commands execute in that same channel
-- **Status Notifications** - Optional notifications sent to a configured channel (can be on a different server)
+- **Any Channel Support** - Use the command from any channel in the server
+- **Cross-Server Notifications** - Optional notifications can be sent to any channel, even on different servers
+- **Smart Message Handling** - Messages are intercepted on BetterDiscord or deleted when sent from other devices
 
 ## Requirements
 
-- BetterDiscord installed
+- BetterDiscord installed **on at least one device** (desktop)
 - Access to the Discord server with the bot
 - `@helper` role to use the `!killgroup` command
 
@@ -24,13 +27,15 @@ A BetterDiscord plugin that provides a `!killgroup` command to close a user's gr
    - Mac: `~/Library/Application Support/BetterDiscord/plugins/`
    - Linux: `~/.config/BetterDiscord/plugins/`
 3. Enable the plugin in Discord Settings → Plugins
+4. **Keep Discord running on your BetterDiscord client** - this monitors for commands from other devices
 
 ## Usage
 
 ### Basic Command
 
-`!killgroup @username`
-
+```
+!killgroup @username
+```
 
 This will:
 1. Check that you have the `@helper` role
@@ -41,10 +46,24 @@ This will:
 
 ### Examples
 
-`!killgroup @John !killgroup @829704502995189773`
+```
+!killgroup @John
+!killgroup <@829704502995189773>
+```
 
+### Multi-Device Usage
 
-**Note:** You can use `!killgroup` from **any channel** in the server. The bot commands (`/ppm_of` and `/close_group`) will be executed in the same channel where you run `!killgroup`.
+**From BetterDiscord (Desktop):**
+- Type `!killgroup @username` - message is intercepted and never sent
+- Workflow executes immediately
+
+**From Mobile/Web/Other Devices:**
+- Type `!killgroup @username` - message is sent to the channel
+- Your BetterDiscord client detects it within milliseconds
+- Message is automatically deleted
+- Workflow executes on your BetterDiscord client
+
+**Important:** Your BetterDiscord client must be running and connected to Discord for multi-device support to work.
 
 ## Settings
 
@@ -72,6 +91,7 @@ To modify these, edit the `CONFIG` object in `ClusterKiller.plugin.js`.
 
 ## How It Works
 
+### From BetterDiscord Client:
 1. **Message Interception:** The plugin intercepts messages you send that start with `!killgroup`
 2. **Role Validation:** Checks if you have the helper role before proceeding
 3. **User ID Parsing:** Extracts the user ID from the `@mention` in your command
@@ -80,6 +100,12 @@ To modify these, edit the `CONFIG` object in `ClusterKiller.plugin.js`.
 6. **Response Parsing:** Waits for the bot's response and extracts the group ID from the embed title (format: `"Group En:123456789:1:1"`)
 7. **Group Closure:** Sends `/close_group <groupid>` to the current channel
 8. **Confirmation:** Shows a success/error notification based on the bot's response
+
+### From Other Devices (Mobile/Web):
+1. **Message Posted:** You send `!killgroup @username` from your phone/web browser
+2. **Message Detection:** Your BetterDiscord client detects the message via Discord's event dispatcher
+3. **Message Deletion:** The message is automatically deleted from the channel
+4. **Workflow Execution:** Steps 2-8 from above execute on your BetterDiscord client
 
 ## Troubleshooting
 
@@ -102,8 +128,16 @@ To modify these, edit the `CONFIG` object in `ClusterKiller.plugin.js`.
 - Try reloading Discord (Ctrl+R)
 - Check console for detailed error messages (enable Verbose Logging)
 
+### Multi-device not working
+- **Ensure your BetterDiscord client is running** - the plugin must be active to detect commands
+- Check that the plugin is enabled in BetterDiscord settings
+- Look for console logs: `"Detected !killgroup message from own account in channel..."`
+- Check for: `"Message deleter loaded successfully"` in console on startup
+- If deletion fails, check console for deletion errors
+
 ### Command not working
 - Make sure you're using the correct format: `!killgroup @username`
+- The `@username` must be a valid mention (autocomplete should work)
 - The plugin must be enabled in BetterDiscord settings
 - Check console logs for errors (F12 → Console tab)
 - Look for detailed logging showing bot message detection and group ID parsing
@@ -112,6 +146,7 @@ To modify these, edit the `CONFIG` object in `ClusterKiller.plugin.js`.
 - Verify the notification channel ID is correct in settings
 - Check console for notification-related errors
 - The notification channel can be on a different server, but you must have permission to post there
+- Look for `"Notification promise rejected"` errors in console
 
 ## Logs and Debugging
 
@@ -123,10 +158,17 @@ To view logs:
 3. Look for messages with `[ClusterKiller]` prefix
 
 Log types:
-- ✅ Success messages
-- ❌ Error messages
-- ⚠️ Warning messages
-- ℹ️ Info messages (only shown when Verbose Logging is enabled)
+- ✅ Success messages (green)
+- ❌ Error messages (red)
+- ⚠️ Warning messages (yellow)
+- ℹ️ Info messages (blue - only shown when Verbose Logging is enabled)
+
+Key logs to look for:
+- `"ClusterKiller plugin started successfully"` - Plugin is active
+- `"Message deleter loaded successfully"` - Multi-device deletion will work
+- `"Detected !killgroup message from own account"` - Command detected from other device
+- `"Deleted !killgroup message"` - Message successfully removed
+- `"Group ID captured from Embed Title"` - Bot response parsed successfully
 
 ## Credits
 

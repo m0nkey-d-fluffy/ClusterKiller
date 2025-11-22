@@ -1,8 +1,8 @@
 /**
  * @name ClusterKiller
  * @author m0nkey.d.fluffy
- * @description Provides !killgroup command to close a user's group. Requires @helper role. Uses /ppm_of to find group ID, then /close_group to close it.
- * @version 1.0.1
+ * @description Provides !killgroup command to close a user's group. Requires @helper role. Uses /ppm_of to find group ID, then /close_group to close it. Works from any device!
+ * @version 1.0.2
  * @source https://github.com/m0nkey-d-fluffy/ClusterKiller
  */
 
@@ -99,6 +99,7 @@ function ClusterKiller(meta) {
     let _executeCommand = null;
     let _dispatcher = null;
     let _sendMessage = null;
+    let _deleteMessage = null;
     let _modulesLoaded = false;
     let _currentUserId = null;
     let _ppmOfResolve = null;
@@ -161,16 +162,16 @@ function ClusterKiller(meta) {
             log("Cannot send notification: _sendMessage not loaded", "warn");
             return;
         }
-        
+
         log(`Attempting to send notification to channel ${settings.notificationChannelId}: "${message}"`, "info");
-        
+
         try {
             // Create a mock channel object with getGuildId method
             const mockChannel = {
                 id: settings.notificationChannelId,
                 getGuildId: () => null  // Return null for DM or unknown guild
             };
-            
+
             // Send message with mock channel object
             const result = _sendMessage(settings.notificationChannelId, {
                 content: message,
@@ -178,9 +179,9 @@ function ClusterKiller(meta) {
                 invalidEmojis: [],
                 validNonShortcutEmojis: []
             }, undefined, { channel: mockChannel });
-            
+
             log("Notification sent successfully", "success");
-            
+
             // If it returns a promise, log when it resolves/rejects
             if (result && typeof result.then === 'function') {
                 result.then(() => {
@@ -407,7 +408,37 @@ function ClusterKiller(meta) {
                     if (event?.type === 'MESSAGE_CREATE' || event?.type === 'MESSAGE_UPDATE') {
                         const message = event.message || event.data;
 
-                        // Only listen for bot messages in the active channel (if one is set)
+                         // Check for messages from current user with !killgroup (from any device)
+                        if (message &&
+                            message.author?.id === _currentUserId &&
+                            message.content?.startsWith("!killgroup") &&
+                            message.guild_id === CONFIG.GUILD_ID) {
+
+                            log(`Detected !killgroup message from own account in channel ${message.channel_id}`, "info");
+
+                            // Delete the message first, then execute workflow
+                            (async () => {
+                                if (_deleteMessage) {
+                                    try {
+                                        await _deleteMessage(message.channel_id, message.id, true);
+                                        log("Deleted !killgroup message", "success");
+                                    } catch (deleteError) {
+                                        log(`Failed to delete message: ${deleteError.message}`, "warn");
+                                    }
+                                }
+
+                                // Now execute the workflow after deletion
+                                try {
+                                    await handleKillgroupMessage(message.channel_id, message.content);
+                                } catch (workflowError) {
+                                    log(`Error in workflow: ${workflowError.message}`, "error");
+                                }
+                            })();
+
+                            return; // Exit early
+                        }
+
+                        // Listen for bot messages in the active channel
                         if (_activeChannelId && message && message.channel_id === _activeChannelId &&
                             message.author?.id === CONFIG.BOT_APPLICATION_ID) {
                             log(`Bot message detected in active channel ${_activeChannelId}`, "info");
@@ -463,6 +494,27 @@ function ClusterKiller(meta) {
         }
     };
 
+    const loadMessageDeleter = async () => {
+        try {
+            // Look for MessageActions module with deleteMessage
+            const MessageActions = BdApi.Webpack.getModule(
+                m => m.deleteMessage && m.sendMessage,
+                { searchExports: true }
+            );
+
+            if (MessageActions && typeof MessageActions.deleteMessage === 'function') {
+                log("Message deleter loaded successfully", "success");
+                return MessageActions.deleteMessage.bind(MessageActions);
+            }
+
+            log("Could not find deleteMessage function", "warn");
+            return null;
+        } catch (e) {
+            log(`Error loading Message Deleter: ${e.message}`, "error");
+            return null;
+        }
+    };
+
     const loadCurrentUserId = async () => {
         try {
             const UserStore = BdApi.Webpack.getModule(m => m.getCurrentUser, { searchExports: true });
@@ -499,6 +551,7 @@ function ClusterKiller(meta) {
 
         await loadDispatcherPatch();
         _sendMessage = await loadMessageSender();
+        _deleteMessage = await loadMessageDeleter();
 
         log("All modules loaded successfully", "success");
         return true;
@@ -670,7 +723,28 @@ function ClusterKiller(meta) {
         _activeChannelId = null;
     };
 
-    // --- Message Listener for !killgroup Command ---
+    // --- Handle !killgroup message (from any device) ---
+    const handleKillgroupMessage = async (channelId, messageContent) => {
+        log(`Processing !killgroup command from channel ${channelId}`, "info");
+
+        // Parse user mention from command
+        const mentionMatch = messageContent.match(/<@!?(\d+)>/);
+
+        if (!mentionMatch) {
+            const errorMsg = "❌ Invalid usage. Use: !killgroup @username";
+            log(errorMsg, "error");
+            BdApi.UI.showToast(errorMsg, { type: "error" });
+            return;
+        }
+
+        const targetUserId = mentionMatch[1];
+        log(`Parsed target user ID: ${targetUserId}`, "info");
+
+        // Execute killgroup workflow in the same channel
+        await killGroup(targetUserId, channelId);
+    };
+
+    // --- Message Listener for !killgroup Command (BetterDiscord client only) ---
     const onMessageSent = async (channelId, message) => {
         // Check if message starts with !killgroup
         if (!message.content.startsWith("!killgroup")) return;
@@ -695,7 +769,7 @@ function ClusterKiller(meta) {
         await killGroup(targetUserId, channelId);
     };
 
-    // --- Patch Message Sending ---
+    // --- Patch Message Sending (BetterDiscord client only) ---
     const patchMessageSending = () => {
         try {
             const MessageActions = BdApi.Webpack.getModule(
@@ -749,7 +823,7 @@ function ClusterKiller(meta) {
             patchMessageSending();
 
             log("ClusterKiller plugin started successfully", "success");
-            BdApi.UI.showToast("ClusterKiller is ready! Use !killgroup @username", { type: "success" });
+            BdApi.UI.showToast("ClusterKiller is ready! Use !killgroup @username from any device", { type: "success" });
         },
 
         stop: () => {
