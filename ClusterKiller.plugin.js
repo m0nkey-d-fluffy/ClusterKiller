@@ -2,7 +2,7 @@
  * @name ClusterKiller
  * @author m0nkey.d.fluffy
  * @description Provides !killgroup command to close a user's group. Requires @helper role. Uses /ppm_of to find group ID, then /close_group to close it. Works from any device!
- * @version 1.0.2
+ * @version 1.0.3
  * @source https://github.com/m0nkey-d-fluffy/ClusterKiller
  */
 
@@ -314,33 +314,62 @@ function ClusterKiller(meta) {
     // --- Module Loading ---
     const loadCommandExecutor = async () => {
         try {
-            const moduleFilter = (m) => {
-                const target = m.default ? m.default : m;
-                if (!target || typeof target !== 'object') return false;
-                return Object.keys(target).some(k => {
-                    try {
-                        const funcString = target[k].toString().toLowerCase();
-                        return typeof target[k] === 'function' &&
-                            funcString.includes("commandorigin") &&
-                            funcString.includes("optionvalues");
-                    } catch (e) { return false; }
-                });
-            };
+            // Try multiple methods to find the command executor
+            let executor = null;
 
-            const mod = await BdApi.Webpack.waitForModule(moduleFilter, { first: true });
-            const target = mod.default ? mod.default : mod;
-            const keyFinder = (t, k) => {
-                try {
-                    const s = t[k].toString().toLowerCase();
-                    return typeof t[k] === 'function' && s.includes("commandorigin") && s.includes("optionvalues");
-                } catch (e) { return false; }
-            };
-
-            const funcKey = Object.getOwnPropertyNames(target).find(k => keyFinder(target, k));
-            if (funcKey) {
-                log("Command executor loaded successfully", "success");
-                return target[funcKey].bind(target);
+            // Method 1: Search by strings in the function source
+            try {
+                const [module, key] = BdApi.Webpack.getWithKey(
+                    BdApi.Webpack.Filters.byStrings("commandOrigin", "optionValues"),
+                    { searchExports: true }
+                );
+                if (module && key && typeof module[key] === 'function') {
+                    executor = module[key].bind(module);
+                    log("Command executor loaded via method 1 (byStrings)", "success");
+                    return executor;
+                }
+            } catch (e) {
+                log(`Method 1 failed: ${e.message}`, "warn");
             }
+
+            // Method 2: Custom filter with waitForModule
+            if (!executor) {
+                const moduleFilter = (m) => {
+                    const target = m.default ? m.default : m;
+                    if (!target || typeof target !== 'object') return false;
+                    return Object.keys(target).some(k => {
+                        try {
+                            const funcString = target[k].toString();
+                            return typeof target[k] === 'function' &&
+                                (funcString.includes("commandOrigin") || funcString.includes("commandorigin")) &&
+                                (funcString.includes("optionValues") || funcString.includes("optionvalues"));
+                        } catch (e) { return false; }
+                    });
+                };
+
+                const mod = await BdApi.Webpack.waitForModule(moduleFilter, { first: true, searchExports: false });
+                if (mod) {
+                    const target = mod.default ? mod.default : mod;
+                    const keyFinder = (t, k) => {
+                        try {
+                            const s = t[k].toString();
+                            return typeof t[k] === 'function' &&
+                                (s.includes("commandOrigin") || s.includes("commandorigin")) &&
+                                (s.includes("optionValues") || s.includes("optionvalues"));
+                        } catch (e) { return false; }
+                    };
+
+                    const funcKey = Object.getOwnPropertyNames(target).find(k => keyFinder(target, k));
+                    if (funcKey) {
+                        executor = target[funcKey].bind(target);
+                        log("Command executor loaded via method 2 (waitForModule)", "success");
+                        return executor;
+                    }
+                }
+            }
+
+            log("Failed to load Command Executor with all methods", "error");
+            return null;
         } catch (e) {
             log(`Fatal Error loading Command Executor: ${e.message}`, "error");
             return null;
@@ -352,40 +381,53 @@ function ClusterKiller(meta) {
             // Try multiple methods to find the dispatcher
             let dispatchModule = null;
 
-            // Method 1: Search for dispatch with _events
+            // Method 1: Use getStore to find Flux Dispatcher
             try {
-                let mod = BdApi.Webpack.getModule(m => m?.dispatch && m?._events, { searchExports: true });
-                if (mod && typeof mod.dispatch === 'function') {
-                    dispatchModule = mod;
-                    log("Found dispatcher via method 1 (dispatch + _events)", "info");
+                const FluxDispatcher = BdApi.Webpack.getStore("FluxDispatcher");
+                if (FluxDispatcher && typeof FluxDispatcher.dispatch === 'function') {
+                    dispatchModule = FluxDispatcher;
+                    log("Found dispatcher via method 1 (getStore)", "success");
                 }
             } catch (e) {
                 log(`Method 1 failed: ${e.message}`, "warn");
             }
 
-            // Method 2: Search just for dispatch function
+            // Method 2: Search for dispatch with _events
             if (!dispatchModule) {
                 try {
-                    let mod = BdApi.Webpack.getModule(m => m?.dispatch && typeof m.dispatch === 'function', { searchExports: true });
+                    let mod = BdApi.Webpack.getModule(m => m?.dispatch && m?._events, { searchExports: true });
                     if (mod && typeof mod.dispatch === 'function') {
                         dispatchModule = mod;
-                        log("Found dispatcher via method 2 (dispatch function)", "info");
+                        log("Found dispatcher via method 2 (dispatch + _events)", "success");
                     }
                 } catch (e) {
                     log(`Method 2 failed: ${e.message}`, "warn");
                 }
             }
 
-            // Method 3: Search in Flux dispatcher
+            // Method 3: Search just for dispatch function
+            if (!dispatchModule) {
+                try {
+                    let mod = BdApi.Webpack.getModule(m => m?.dispatch && typeof m.dispatch === 'function', { searchExports: true });
+                    if (mod && typeof mod.dispatch === 'function') {
+                        dispatchModule = mod;
+                        log("Found dispatcher via method 3 (dispatch function)", "success");
+                    }
+                } catch (e) {
+                    log(`Method 3 failed: ${e.message}`, "warn");
+                }
+            }
+
+            // Method 4: Search in Flux dispatcher default export
             if (!dispatchModule) {
                 try {
                     let mod = BdApi.Webpack.getModule(m => m?.default?.dispatch, { searchExports: false });
                     if (mod?.default && typeof mod.default.dispatch === 'function') {
                         dispatchModule = mod.default;
-                        log("Found dispatcher via method 3 (Flux dispatcher)", "info");
+                        log("Found dispatcher via method 4 (Flux dispatcher default)", "success");
                     }
                 } catch (e) {
-                    log(`Method 3 failed: ${e.message}`, "warn");
+                    log(`Method 4 failed: ${e.message}`, "warn");
                 }
             }
 
@@ -459,35 +501,75 @@ function ClusterKiller(meta) {
 
     const loadMessageSender = async () => {
         try {
-            const moduleFilter = (m) => {
-                const target = m.default ? m.default : m;
-                if (!target || typeof target !== 'object') return false;
-                return Object.keys(target).some(k => {
-                    try {
-                        const funcString = target[k].toString().toLowerCase();
-                        return typeof target[k] === 'function' &&
-                            funcString.includes("invalidemojis") &&
-                            funcString.includes("validnonshortcutemojis");
-                    } catch (e) { return false; }
-                });
-            };
+            let sender = null;
 
-            const mod = await BdApi.Webpack.waitForModule(moduleFilter, { first: true });
-            const target = mod.default ? mod.default : mod;
-            const keyFinder = (t, k) => {
-                try {
-                    const s = t[k].toString().toLowerCase();
-                    return typeof t[k] === 'function' &&
-                        s.includes("invalidemojis") &&
-                        s.includes("validnonshortcutemojis");
-                } catch (e) { return false; }
-            };
-
-            const funcKey = Object.getOwnPropertyNames(target).find(k => keyFinder(target, k));
-            if (funcKey) {
-                log("Message sender loaded successfully", "success");
-                return target[funcKey].bind(target);
+            // Method 1: Try to find via byStrings
+            try {
+                const [module, key] = BdApi.Webpack.getWithKey(
+                    BdApi.Webpack.Filters.byStrings("invalidEmojis", "validNonShortcutEmojis"),
+                    { searchExports: true }
+                );
+                if (module && key && typeof module[key] === 'function') {
+                    sender = module[key].bind(module);
+                    log("Message sender loaded via method 1 (byStrings)", "success");
+                    return sender;
+                }
+            } catch (e) {
+                log(`Method 1 failed: ${e.message}`, "warn");
             }
+
+            // Method 2: Try finding MessageActions with sendMessage
+            if (!sender) {
+                try {
+                    const MessageActions = BdApi.Webpack.getByKeys("sendMessage", "editMessage");
+                    if (MessageActions && typeof MessageActions.sendMessage === 'function') {
+                        sender = MessageActions.sendMessage.bind(MessageActions);
+                        log("Message sender loaded via method 2 (MessageActions)", "success");
+                        return sender;
+                    }
+                } catch (e) {
+                    log(`Method 2 failed: ${e.message}`, "warn");
+                }
+            }
+
+            // Method 3: Custom filter with waitForModule (fallback)
+            if (!sender) {
+                const moduleFilter = (m) => {
+                    const target = m.default ? m.default : m;
+                    if (!target || typeof target !== 'object') return false;
+                    return Object.keys(target).some(k => {
+                        try {
+                            const funcString = target[k].toString();
+                            return typeof target[k] === 'function' &&
+                                (funcString.includes("invalidEmojis") || funcString.includes("invalidemojis")) &&
+                                (funcString.includes("validNonShortcutEmojis") || funcString.includes("validnonshortcutemojis"));
+                        } catch (e) { return false; }
+                    });
+                };
+
+                const mod = await BdApi.Webpack.waitForModule(moduleFilter, { first: true, searchExports: false });
+                if (mod) {
+                    const target = mod.default ? mod.default : mod;
+                    const keyFinder = (t, k) => {
+                        try {
+                            const s = t[k].toString();
+                            return typeof t[k] === 'function' &&
+                                (s.includes("invalidEmojis") || s.includes("invalidemojis")) &&
+                                (s.includes("validNonShortcutEmojis") || s.includes("validnonshortcutemojis"));
+                        } catch (e) { return false; }
+                    };
+
+                    const funcKey = Object.getOwnPropertyNames(target).find(k => keyFinder(target, k));
+                    if (funcKey) {
+                        sender = target[funcKey].bind(target);
+                        log("Message sender loaded via method 3 (waitForModule)", "success");
+                        return sender;
+                    }
+                }
+            }
+
+            log("Could not load Message Sender with all methods", "warn");
+            return null;
         } catch (e) {
             log(`Error loading Message Sender: ${e.message}`, "error");
             return null;
@@ -496,18 +578,52 @@ function ClusterKiller(meta) {
 
     const loadMessageDeleter = async () => {
         try {
-            // Look for MessageActions module with deleteMessage
-            const MessageActions = BdApi.Webpack.getModule(
-                m => m.deleteMessage && m.sendMessage,
-                { searchExports: true }
-            );
+            let deleter = null;
 
-            if (MessageActions && typeof MessageActions.deleteMessage === 'function') {
-                log("Message deleter loaded successfully", "success");
-                return MessageActions.deleteMessage.bind(MessageActions);
+            // Method 1: Look for MessageActions module with deleteMessage
+            try {
+                const MessageActions = BdApi.Webpack.getByKeys("deleteMessage", "sendMessage");
+                if (MessageActions && typeof MessageActions.deleteMessage === 'function') {
+                    deleter = MessageActions.deleteMessage.bind(MessageActions);
+                    log("Message deleter loaded via method 1 (getByKeys)", "success");
+                    return deleter;
+                }
+            } catch (e) {
+                log(`Method 1 failed: ${e.message}`, "warn");
             }
 
-            log("Could not find deleteMessage function", "warn");
+            // Method 2: Search with searchExports option
+            if (!deleter) {
+                try {
+                    const MessageActions = BdApi.Webpack.getModule(
+                        m => m.deleteMessage && m.sendMessage,
+                        { searchExports: true }
+                    );
+                    if (MessageActions && typeof MessageActions.deleteMessage === 'function') {
+                        deleter = MessageActions.deleteMessage.bind(MessageActions);
+                        log("Message deleter loaded via method 2 (searchExports)", "success");
+                        return deleter;
+                    }
+                } catch (e) {
+                    log(`Method 2 failed: ${e.message}`, "warn");
+                }
+            }
+
+            // Method 3: Search just for deleteMessage
+            if (!deleter) {
+                try {
+                    const MessageActions = BdApi.Webpack.getByKeys("deleteMessage");
+                    if (MessageActions && typeof MessageActions.deleteMessage === 'function') {
+                        deleter = MessageActions.deleteMessage.bind(MessageActions);
+                        log("Message deleter loaded via method 3 (deleteMessage only)", "success");
+                        return deleter;
+                    }
+                } catch (e) {
+                    log(`Method 3 failed: ${e.message}`, "warn");
+                }
+            }
+
+            log("Could not find deleteMessage function with all methods", "warn");
             return null;
         } catch (e) {
             log(`Error loading Message Deleter: ${e.message}`, "error");
@@ -517,16 +633,58 @@ function ClusterKiller(meta) {
 
     const loadCurrentUserId = async () => {
         try {
-            const UserStore = BdApi.Webpack.getModule(m => m.getCurrentUser, { searchExports: true });
-            if (UserStore) {
-                const currentUser = UserStore.getCurrentUser();
-                if (currentUser && currentUser.id) {
-                    _currentUserId = currentUser.id;
-                    log(`Current User ID: ${_currentUserId}`, "info");
-                    return true;
+            let UserStore = null;
+
+            // Method 1: Use getStore to find UserStore
+            try {
+                UserStore = BdApi.Webpack.getStore("UserStore");
+                if (UserStore && typeof UserStore.getCurrentUser === 'function') {
+                    const currentUser = UserStore.getCurrentUser();
+                    if (currentUser && currentUser.id) {
+                        _currentUserId = currentUser.id;
+                        log(`Current User ID via method 1 (getStore): ${_currentUserId}`, "success");
+                        return true;
+                    }
+                }
+            } catch (e) {
+                log(`Method 1 failed: ${e.message}`, "warn");
+            }
+
+            // Method 2: Search by getCurrentUser function
+            if (!_currentUserId) {
+                try {
+                    UserStore = BdApi.Webpack.getByKeys("getCurrentUser", "getUser");
+                    if (UserStore && typeof UserStore.getCurrentUser === 'function') {
+                        const currentUser = UserStore.getCurrentUser();
+                        if (currentUser && currentUser.id) {
+                            _currentUserId = currentUser.id;
+                            log(`Current User ID via method 2 (getByKeys): ${_currentUserId}`, "success");
+                            return true;
+                        }
+                    }
+                } catch (e) {
+                    log(`Method 2 failed: ${e.message}`, "warn");
                 }
             }
-            log("Could not load current user ID", "error");
+
+            // Method 3: Search with searchExports option
+            if (!_currentUserId) {
+                try {
+                    UserStore = BdApi.Webpack.getModule(m => m.getCurrentUser, { searchExports: true });
+                    if (UserStore && typeof UserStore.getCurrentUser === 'function') {
+                        const currentUser = UserStore.getCurrentUser();
+                        if (currentUser && currentUser.id) {
+                            _currentUserId = currentUser.id;
+                            log(`Current User ID via method 3 (searchExports): ${_currentUserId}`, "success");
+                            return true;
+                        }
+                    }
+                } catch (e) {
+                    log(`Method 3 failed: ${e.message}`, "warn");
+                }
+            }
+
+            log("Could not load current user ID with all methods", "error");
             return false;
         } catch (e) {
             log(`Error loading current user ID: ${e.message}`, "error");
@@ -611,9 +769,35 @@ function ClusterKiller(meta) {
     // --- Role Checking ---
     const hasHelperRole = () => {
         try {
-            const GuildMemberStore = BdApi.Webpack.getModule(m => m.getMember, { searchExports: true });
+            let GuildMemberStore = null;
+
+            // Method 1: Use getStore to find GuildMemberStore
+            try {
+                GuildMemberStore = BdApi.Webpack.getStore("GuildMemberStore");
+            } catch (e) {
+                log(`Method 1 failed: ${e.message}`, "warn");
+            }
+
+            // Method 2: Search by getMember function
             if (!GuildMemberStore) {
-                log("Could not find GuildMemberStore", "error");
+                try {
+                    GuildMemberStore = BdApi.Webpack.getByKeys("getMember", "getMembers");
+                } catch (e) {
+                    log(`Method 2 failed: ${e.message}`, "warn");
+                }
+            }
+
+            // Method 3: Search with searchExports option
+            if (!GuildMemberStore) {
+                try {
+                    GuildMemberStore = BdApi.Webpack.getModule(m => m.getMember, { searchExports: true });
+                } catch (e) {
+                    log(`Method 3 failed: ${e.message}`, "warn");
+                }
+            }
+
+            if (!GuildMemberStore || typeof GuildMemberStore.getMember !== 'function') {
+                log("Could not find GuildMemberStore with all methods", "error");
                 return false;
             }
 
@@ -772,13 +956,38 @@ function ClusterKiller(meta) {
     // --- Patch Message Sending (BetterDiscord client only) ---
     const patchMessageSending = () => {
         try {
-            const MessageActions = BdApi.Webpack.getModule(
-                m => m.sendMessage && m.editMessage,
-                { searchExports: true }
-            );
+            let MessageActions = null;
 
+            // Method 1: Try getByKeys
+            try {
+                MessageActions = BdApi.Webpack.getByKeys("sendMessage", "editMessage");
+            } catch (e) {
+                log(`Method 1 failed: ${e.message}`, "warn");
+            }
+
+            // Method 2: Try with searchExports
             if (!MessageActions) {
-                log("Could not find MessageActions module", "error");
+                try {
+                    MessageActions = BdApi.Webpack.getModule(
+                        m => m.sendMessage && m.editMessage,
+                        { searchExports: true }
+                    );
+                } catch (e) {
+                    log(`Method 2 failed: ${e.message}`, "warn");
+                }
+            }
+
+            // Method 3: Just search for sendMessage
+            if (!MessageActions) {
+                try {
+                    MessageActions = BdApi.Webpack.getByKeys("sendMessage");
+                } catch (e) {
+                    log(`Method 3 failed: ${e.message}`, "warn");
+                }
+            }
+
+            if (!MessageActions || typeof MessageActions.sendMessage !== 'function') {
+                log("Could not find MessageActions module with all methods", "error");
                 return;
             }
 
