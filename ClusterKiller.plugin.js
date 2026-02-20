@@ -2,7 +2,7 @@
  * @name ClusterKiller
  * @author m0nkey.d.fluffy
  * @description Provides !killgroup command to close a user's group. Requires @helper role. Uses /ppm_of to find group ID, then /close_group to close it. Works from any device!
- * @version 1.0.3
+ * @version 1.0.5
  * @source https://github.com/m0nkey-d-fluffy/ClusterKiller
  */
 
@@ -37,6 +37,13 @@ const pluginConfig = {
             value: ""
         },
         {
+            type: "text",
+            id: "userNotificationChannelId",
+            name: "User Notification Channel ID",
+            note: "Channel where formatted reports and user pings are sent after killing a group.",
+            value: "1443609380397256805"
+        },
+        {
             type: "switch",
             id: "isVerbose",
             name: "Verbose Logging",
@@ -58,17 +65,17 @@ function ClusterKiller(meta) {
     // --- CONFIGURATION: Core IDs and Timing ---
     const CONFIG = {
         GUILD_ID: "1334603881652555896",                // Guild ID
-        BOT_APPLICATION_ID: "1334630845574676520",      // Bot application ID
+        BOT_APPLICATION_ID: "1474129399073996974",      // Bot application ID
         HELPER_ROLE_ID: "1426619911626686598",          // Helper role required to use /killgroup
         PPM_OF_TIMEOUT_MS: 15 * 1000,                   // 15 seconds max wait for /ppm_of response
         CLOSE_GROUP_TIMEOUT_MS: 10 * 1000               // 10 seconds max wait for /close_group response
     };
 
-    // --- COMMAND DATA ---
+    // --- COMMAND DATA (Reapa Bot) ---
     const PPM_OF_COMMAND = {
         name: "ppm_of",
-        commandId: "1437564821078937683",
-        commandVersion: "1437567249022976060",
+        commandId: "1474137257467449505",
+        commandVersion: "1474137257962246192",
         description: "Check the group and PPMs of a user (Helper only)",
         options: [
             {
@@ -82,8 +89,8 @@ function ClusterKiller(meta) {
 
     const CLOSE_GROUP_COMMAND = {
         name: "close_group",
-        commandId: "1437564821078937682",
-        commandVersion: "1437564821078937684",
+        commandId: "1474137257467449499",
+        commandVersion: "1474137257962246186",
         description: "Stop a group (helper only)",
         options: [
             {
@@ -194,6 +201,31 @@ function ClusterKiller(meta) {
             // Log the full error for debugging
             log(`Could not send notification: ${error.message}`, "error");
             log(`Error stack: ${error.stack}`, "error");
+        }
+    };
+
+    // --- Send User Notification (formatted reports) ---
+    const sendUserNotification = (message) => {
+        const targetChannelId = settings.userNotificationChannelId;
+        if (!targetChannelId) {
+            log("User notification skipped: no channel configured", "info");
+            return;
+        }
+        if (!_sendMessage) {
+            log("Cannot send user notification: _sendMessage not loaded", "warn");
+            return;
+        }
+
+        try {
+            _sendMessage(targetChannelId, {
+                content: message,
+                tts: false,
+                invalidEmojis: [],
+                validNonShortcutEmojis: []
+            }, undefined, {});
+            log(`User notification sent to channel ${targetChannelId}`, "success");
+        } catch (error) {
+            log(`Could not send user notification: ${error.message}`, "error");
         }
     };
 
@@ -381,53 +413,66 @@ function ClusterKiller(meta) {
             // Try multiple methods to find the dispatcher
             let dispatchModule = null;
 
-            // Method 1: Use getStore to find Flux Dispatcher
+            // Method 1: Try getting FluxDispatcher from Stores (new BD 1.13.0+ pattern)
             try {
-                const FluxDispatcher = BdApi.Webpack.getStore("FluxDispatcher");
-                if (FluxDispatcher && typeof FluxDispatcher.dispatch === 'function') {
-                    dispatchModule = FluxDispatcher;
-                    log("Found dispatcher via method 1 (getStore)", "success");
+                dispatchModule = BdApi.Webpack.Stores?.FluxDispatcher;
+                if (dispatchModule && typeof dispatchModule.dispatch === 'function') {
+                    log("Found dispatcher via method 1 (Stores.FluxDispatcher)", "success");
+                } else {
+                    dispatchModule = null;
                 }
             } catch (e) {
                 log(`Method 1 failed: ${e.message}`, "warn");
             }
 
-            // Method 2: Search for dispatch with _events
+            // Method 2: Try getModule with _actionHandlers (new Discord pattern)
             if (!dispatchModule) {
                 try {
-                    let mod = BdApi.Webpack.getModule(m => m?.dispatch && m?._events, { searchExports: true });
+                    let mod = BdApi.Webpack.getModule(m => m?._actionHandlers && m?.dispatch && m?.subscribe, { searchExports: true });
                     if (mod && typeof mod.dispatch === 'function') {
                         dispatchModule = mod;
-                        log("Found dispatcher via method 2 (dispatch + _events)", "success");
+                        log("Found dispatcher via method 2 (_actionHandlers)", "success");
                     }
                 } catch (e) {
                     log(`Method 2 failed: ${e.message}`, "warn");
                 }
             }
 
-            // Method 3: Search just for dispatch function
+            // Method 3: Try getByKeys with dispatch, subscribe, register
             if (!dispatchModule) {
                 try {
-                    let mod = BdApi.Webpack.getModule(m => m?.dispatch && typeof m.dispatch === 'function', { searchExports: true });
+                    let mod = BdApi.Webpack.getByKeys("dispatch", "subscribe", "register", { searchExports: true });
                     if (mod && typeof mod.dispatch === 'function') {
                         dispatchModule = mod;
-                        log("Found dispatcher via method 3 (dispatch function)", "success");
+                        log("Found dispatcher via method 3 (getByKeys)", "success");
                     }
                 } catch (e) {
                     log(`Method 3 failed: ${e.message}`, "warn");
                 }
             }
 
-            // Method 4: Search in Flux dispatcher default export
+            // Method 4: Search for dispatch with _events (legacy)
             if (!dispatchModule) {
                 try {
-                    let mod = BdApi.Webpack.getModule(m => m?.default?.dispatch, { searchExports: false });
-                    if (mod?.default && typeof mod.default.dispatch === 'function') {
-                        dispatchModule = mod.default;
-                        log("Found dispatcher via method 4 (Flux dispatcher default)", "success");
+                    let mod = BdApi.Webpack.getModule(m => m?.dispatch && m?._events, { searchExports: true });
+                    if (mod && typeof mod.dispatch === 'function') {
+                        dispatchModule = mod;
+                        log("Found dispatcher via method 4 (dispatch + _events)", "success");
                     }
                 } catch (e) {
                     log(`Method 4 failed: ${e.message}`, "warn");
+                }
+            }
+
+            // Method 5: waitForModule as last resort
+            if (!dispatchModule) {
+                try {
+                    dispatchModule = await BdApi.Webpack.waitForModule(m => m?._actionHandlers && m?.dispatch);
+                    if (dispatchModule && typeof dispatchModule.dispatch === 'function') {
+                        log("Found dispatcher via method 5 (waitForModule)", "success");
+                    }
+                } catch (e) {
+                    log(`Method 5 failed: ${e.message}`, "warn");
                 }
             }
 
@@ -896,11 +941,37 @@ function ClusterKiller(meta) {
             log(successMsg, "success");
             sendNotification(successMsg);
             BdApi.UI.showToast(successMsg, { type: "success" });
+
+            // Send formatted report to user notification channel
+            const groupName = groupId.split(':')[0] || 'unknown';
+            const lines = [];
+            lines.push(`-# ───────────────────────────────────`);
+            lines.push(`-# 🎯 **ClusterKiller Report**`);
+            lines.push(``);
+            lines.push(`-# **Target:** <@${userId}>`);
+            lines.push(`-# **Group:** ${groupId} (${groupName})`);
+            lines.push(`-# **Status:** ✅ Closed successfully`);
+            lines.push(``);
+            lines.push(`-# 🛑 Your group has been closed. Please start again in 5 minutes, <@${userId}>`);
+            lines.push(`-# ───────────────────────────────────`);
+            sendUserNotification(lines.join('\n'));
         } else {
             const errorMsg = `❌ Failed to close group ${groupId}`;
             log(errorMsg, "error");
             sendNotification(errorMsg);
             BdApi.UI.showToast(errorMsg, { type: "error" });
+
+            // Send formatted error report
+            const groupName = groupId.split(':')[0] || 'unknown';
+            const lines = [];
+            lines.push(`-# ───────────────────────────────────`);
+            lines.push(`-# 🎯 **ClusterKiller Report**`);
+            lines.push(``);
+            lines.push(`-# **Target:** <@${userId}>`);
+            lines.push(`-# **Group:** ${groupId} (${groupName})`);
+            lines.push(`-# **Status:** ❌ Failed to close`);
+            lines.push(`-# ───────────────────────────────────`);
+            sendUserNotification(lines.join('\n'));
         }
 
         // Clear active channel
